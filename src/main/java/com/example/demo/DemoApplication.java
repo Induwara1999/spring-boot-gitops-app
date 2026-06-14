@@ -15,6 +15,6 @@ public class DemoApplication {
 
     @GetMapping("/")
     public String hello() {
-        return "Hello from Spring Boot deployed via Jenkins Automation Pipeline!";
+        return "Hello from Spring Boot deployed using GitOps!";
     }
 }
