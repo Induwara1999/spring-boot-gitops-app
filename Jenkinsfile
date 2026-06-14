@@ -6,12 +6,12 @@ pipeline {
     }
 
     environment {
-        // Segregated application namespace coordinates to avoid overlapping existing configurations
+        // Segregated application name to coexist cleanly alongside your previous application
         APP_NAME         = 'spring-boot-gitops-app'
         DOCKER_USER      = 'indu1999'
         IMAGE_TAG        = "${DOCKER_USER}/${APP_NAME}:${BUILD_NUMBER}"
         
-        // Coordinates for your separate infrastructure manifest repository
+        // Coordinates for your dedicated infrastructure manifest repository
         GITOPS_REPO_NAME = 'spring-boot-gitops'
         GITOPS_REPO_URL  = "github.com/Induwara1999/${GITOPS_REPO_NAME}.git"
     }
@@ -50,7 +50,8 @@ pipeline {
         stage('3. Update GitOps Manifests Repository') {
             steps {
                 echo "Modifying deployment tracking files inside declarative manifest structures..."
-                withCredentials([string(credentialsId: 'github-fine-grained-token', variable: 'GH_TOKEN')]) {
+                // Successfully binds using your exact 'github-credentials' ID mapping
+                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GH_TOKEN')]) {
                     sh """
                         # Clean up leftover workspaces from older system check iterations
                         rm -rf ${GITOPS_REPO_NAME}
