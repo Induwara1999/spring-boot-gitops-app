@@ -1,75 +1,75 @@
 pipeline {
     agent any
 
+    tools {
+        maven 'maven-3.9.6'
+    }
+
     environment {
-        CLUSTER_URL  = 'https://192.168.1.6:6443'
-        APP_NAME     = 'spring-boot-app'
-        NAMESPACE    = 'jenkins-apps'
-        IMAGE_TAG    = "local/${APP_NAME}:${BUILD_NUMBER}"
+        // Segregated application namespace coordinates to avoid overlapping existing configurations
+        APP_NAME         = 'spring-boot-gitops-app'
+        DOCKER_USER      = 'indu1999'
+        IMAGE_TAG        = "${DOCKER_USER}/${APP_NAME}:${BUILD_NUMBER}"
+        
+        // Coordinates for your separate infrastructure manifest repository
+        GITOPS_REPO_NAME = 'spring-boot-gitops'
+        GITOPS_REPO_URL  = "github.com/Induwara1999/${GITOPS_REPO_NAME}.git"
     }
 
     stages {
         stage('1. Maven Build & Test') {
             steps {
-                echo 'Compiling App inside Maven Container...'
-                // Spins up a dynamic container to build the target jar artifact
-                sh 'docker run --rm -v "${WORKSPACE}":/usr/src/mymaven -v /root/.m2:/root/.m2 -w /usr/src/mymaven maven:3.9.6-eclipse-temurin-17 mvn clean package -DskipTests'
+                echo 'Compiling App Code using Native Maven Tool...'
+                sh 'mvn clean package -DskipTests'
             }
         }
 
-        stage('2. Build Docker Image') {
+        stage('2. Build & Push Docker Image') {
             steps {
-                echo "Building Container Image from Dockerfile..."
-                sh "docker build -t ${IMAGE_TAG} ."
-            }
-        }
-
-        stage('3. Push NodePort Deployments to Rancher') {
-            steps {
-                echo "Interacting with Rancher API..."
-                withCredentials([string(credentialsId: 'kubernetes-cluster-token', variable: 'KUBE_TOKEN')]) {
+                echo "Installing Docker CLI binary and managing image lifecycle..."
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'HUB_USER', passwordVariable: 'HUB_TOKEN')]) {
                     sh """
-                        # Create or Update Kubernetes Deployment
-                        curl -k -X POST -H "Authorization: Bearer ${KUBE_TOKEN}" -H "Content-Type: application/yaml" --data "
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ${APP_NAME}
-  namespace: ${NAMESPACE}
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ${APP_NAME}
-  template:
-    metadata:
-      labels:
-        app: ${APP_NAME}
-    spec:
-      containers:
-      - name: spring-app
-        image: ${IMAGE_TAG}
-        imagePullPolicy: Never
-        ports:
-        - containerPort: 8080
-" ${CLUSTER_URL}/apis/apps/v1/namespaces/${NAMESPACE}/deployments || echo 'Deployment already exists'
+                        # Pull local static Docker binary if missing
+                        if [ ! -f ./docker ]; then
+                            echo "Downloading Docker CLI v26.1.4..."
+                            curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-26.1.4.tgz | tar -xzO docker/docker > ./docker
+                            chmod +x ./docker
+                        fi
+                        
+                        # Build container image matching the new application tag path
+                        ./docker build -t ${IMAGE_TAG} .
+                        
+                        # Authenticate and upload to Docker Hub
+                        echo "\$HUB_TOKEN" | ./docker login --username "${DOCKER_USER}" --password-stdin
+                        ./docker push ${IMAGE_TAG}
+                    """
+                }
+            }
+        }
 
-                        # Create or Update NodePort Service
-                        curl -k -X POST -H "Authorization: Bearer ${KUBE_TOKEN}" -H "Content-Type: application/yaml" --data "
-apiVersion: v1
-kind: Service
-metadata:
-  name: ${APP_NAME}-service
-  namespace: ${NAMESPACE}
-spec:
-  type: NodePort
-  selector:
-    app: ${APP_NAME}
-  ports:
-  - port: 8080
-    targetPort: 8080
-    nodePort: 32085
-" ${CLUSTER_URL}/api/v1/namespaces/${NAMESPACE}/services || echo 'Service already exists'
+        stage('3. Update GitOps Manifests Repository') {
+            steps {
+                echo "Modifying deployment tracking files inside declarative manifest structures..."
+                withCredentials([string(credentialsId: 'github-fine-grained-token', variable: 'GH_TOKEN')]) {
+                    sh """
+                        # Clean up leftover workspaces from older system check iterations
+                        rm -rf ${GITOPS_REPO_NAME}
+                        
+                        # Set up local workspace Git context identity for automation tracing
+                        git config --global user.email "jenkins-automation@local.infra"
+                        git config --global user.name "Jenkins GitOps Engine"
+                        
+                        # Authenticate securely using the Personal Access Token and clone the Manifest Repo
+                        git clone https://${GH_TOKEN}@${GITOPS_REPO_URL}
+                        cd ${GITOPS_REPO_NAME}
+                        
+                        # Find the image field inside deployment.yaml and update it to the current build number
+                        sed -i "s|image: ${DOCKER_USER}/${APP_NAME}:.*|image: ${IMAGE_TAG}|g" deployment.yaml
+                        
+                        # Stage, commit, and push changes back up to GitHub for ArgoCD to detect
+                        git add deployment.yaml
+                        git commit -m "automated-ops: update image tracker flag target to release v${BUILD_NUMBER}"
+                        git push origin main
                     """
                 }
             }
@@ -77,6 +77,8 @@ spec:
     }
     
     post {
-        cleanWs()
+        always {
+            cleanWs()
+        }
     }
 }
